@@ -35,7 +35,7 @@ monitor logic lives on the Linux side, in a backend for each compositor:
  │  hyprctl output create        Mutter ScreenCast     │        │             │
  │  headless EXT-1               RecordVirtual         │        │             │
  │  backend: kde                      │ PipeWire       │        │             │
- │  KWin zkde_screencast         GStreamer + VA/x264/  │        │             │
+ │  portal ScreenCast            GStreamer + VA/x264/  │        │             │
  │  virtual output                  openh264           │        │             │
  │        │ wlr-screencopy / KWin PipeWire             │        │             │
  │        └────────── raw Annex-B H.264 ──┘            │        │             │
@@ -942,6 +942,6 @@ next to each rule explain the details.
   for example by running the GStreamer pipeline in-process.
 - Address discovery (mDNS or broadcast), so a phone finds the computer after
   its address changes without rescanning the QR.
-- A KDE Plasma backend, using KWin virtual outputs through `kwin_wayland` screencast.
+- A KDE Plasma backend, using virtual outputs through the XDG Desktop Portal (ScreenCast Virtual source).
 - Pen input with pressure and hover, and a keyboard on the phone.
 - A latency overlay for tuning.
