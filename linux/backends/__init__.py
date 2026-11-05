@@ -5,7 +5,7 @@ Annex-B H.264 byte stream that tandemd parses and broadcasts.
     hyprland : Hyprland headless output + wf-recorder (VA-API), or the
                portal + GStreamer NVENC when Hyprland renders on NVIDIA [Arch]
     gnome    : Mutter ScreenCast virtual monitor + GStreamer/PipeWire [Ubuntu, Fedora]
-    kde      : KWin virtual output (zkde_screencast_unstable_v1)
+    kde      : xdg-desktop-portal virtual monitor (ScreenCast Virtual)
                + GStreamer/PipeWire [KDE Plasma on Wayland]
 
 Backend interface (duck-typed):
@@ -68,5 +68,5 @@ def create(name, args):
 def describe(name):
     return {"hyprland": "Hyprland (headless output + wf-recorder / portal)",
             "gnome": "GNOME / Mutter (virtual monitor + PipeWire)",
-            "kde": "KDE Plasma (KWin virtual output + PipeWire)"}.get(
+            "kde": "KDE Plasma (portal virtual monitor + PipeWire)"}.get(
                 name, "unsupported desktop")
