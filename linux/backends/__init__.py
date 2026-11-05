@@ -5,6 +5,8 @@ Annex-B H.264 byte stream that tandemd parses and broadcasts.
     hyprland : Hyprland headless output + wf-recorder (VA-API), or the
                portal + GStreamer NVENC when Hyprland renders on NVIDIA [Arch]
     gnome    : Mutter ScreenCast virtual monitor + GStreamer/PipeWire [Ubuntu, Fedora]
+    kde      : KWin virtual output (zkde_screencast_unstable_v1)
+               + GStreamer/PipeWire [KDE Plasma on Wayland]
 
 Backend interface (duck-typed):
     missing()            -> list of missing tools (static)
@@ -26,9 +28,9 @@ Optional:
 
 import os
 
-from . import gnome, hyprland
+from . import gnome, hyprland, kde
 
-NAMES = ("hyprland", "gnome")
+NAMES = ("hyprland", "gnome", "kde")
 
 
 def detect():
@@ -37,11 +39,15 @@ def detect():
         return "hyprland"
     if gnome.is_gnome_wayland():
         return "gnome"
+    if kde.is_kde_wayland():
+        return "kde"
     desk = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
     if "hyprland" in desk:
         return "hyprland"
     if "gnome" in desk:
         return "gnome"          # X11 GNOME: setup() will explain the failure
+    if "kde" in desk:
+        return "kde"            # X11 KDE: setup() will explain the failure
     return None
 
 
@@ -52,11 +58,15 @@ def create(name, args):
         return hyprland.HyprlandBackend(args)
     if name == "gnome":
         return gnome.GnomeBackend(args)
-    raise SystemExit("unsupported desktop: run Hyprland, or GNOME on Wayland "
-                     "(Ubuntu / Fedora). Use --backend to force one.")
+    if name == "kde":
+        return kde.KdeBackend(args)
+    raise SystemExit("unsupported desktop: run Hyprland, GNOME on Wayland "
+                     "(Ubuntu / Fedora), or KDE Plasma on Wayland. "
+                     "Use --backend to force one.")
 
 
 def describe(name):
     return {"hyprland": "Hyprland (headless output + wf-recorder / portal)",
-            "gnome": "GNOME / Mutter (virtual monitor + PipeWire)"}.get(
+            "gnome": "GNOME / Mutter (virtual monitor + PipeWire)",
+            "kde": "KDE Plasma (KWin virtual output + PipeWire)"}.get(
                 name, "unsupported desktop")
