@@ -34,15 +34,16 @@ monitor logic lives on the Linux side, in a backend for each compositor:
  │  backend: hyprland            backend: gnome        │        │             │
  │  hyprctl output create        Mutter ScreenCast     │        │             │
  │  headless EXT-1               RecordVirtual         │        │             │
- │        │ wlr-screencopy             │ PipeWire       │        │             │
- │  wf-recorder + VA-API         GStreamer + VA/x264/  │        │             │
- │        │                      openh264              │        │             │
+ │  backend: kde                      │ PipeWire       │        │             │
+ │  KWin zkde_screencast         GStreamer + VA/x264/  │        │             │
+ │  virtual output                  openh264           │        │             │
+ │        │ wlr-screencopy / KWin PipeWire             │        │             │
  │        └────────── raw Annex-B H.264 ──┘            │        │             │
  │                       │ pipe                        │        │             │
  │             tandemd.py  (parse, GOP cache,        │  TCP   │ MediaCodec  │
  │             per-client senders, heartbeats) ────────┼───────▶│  → Surface  │
  │             phone_input.py (pairing, touches) ◀─────┼────────┤ touches     │
- │               → uinput touchscreen  (Hyprland)      │        │             │
+ │               → uinput touchscreen  (Hyprland, KDE) │        │             │
  │               → Mutter RemoteDesktop (GNOME)        │        │             │
  │                       ▲                             │        │             │
  │             tui.py (config, QR pairing, lifecycle)  │        │             │
