@@ -87,9 +87,11 @@ def kscreen_outputs():
         r = subprocess.run(["kscreen-doctor", "-j"], capture_output=True,
                            text=True, timeout=10)
         if r.returncode != 0:
+            log(f"kscreen-doctor -j failed: {(r.stderr or r.stdout).strip()}")
             return []
         return json.loads(r.stdout).get("outputs", [])
-    except Exception:
+    except Exception as e:
+        log(f"kscreen-doctor -j failed: {e}")
         return []
 
 
@@ -104,10 +106,19 @@ def find_connector(outputs=None):
     return next((n for n in names if OUTPUT_NAME in n), None)
 
 
+def _is_primary(o):
+    """Plasma 6's kscreen-doctor JSON has no "primary" flag: the primary
+    output is the one with priority 1 (every other output is 0). Plasma 5
+    used "primary": true. Accept both."""
+    if o.get("primary"):
+        return True
+    return o.get("priority", 0) == 1
+
+
 def primary_monitor_desc():
     """One-line description of the primary display, for the TUI."""
     for o in kscreen_outputs():
-        if o.get("primary"):
+        if _is_primary(o):
             size = o.get("size", {})
             return (f"{o.get('name', '?')}  "
                     f"{size.get('width', '?')}x{size.get('height', '?')}"
@@ -116,13 +127,14 @@ def primary_monitor_desc():
 
 
 def _logical_rect(o):
-    """(x, y, w, h) of a KScreen output in logical pixels."""
+    """(x, y, w, h) of a KScreen output in logical pixels.
+
+    KScreen 6 (Plasma 6) works in logical coordinates throughout: "pos"
+    and "size" are already logical, so no division by scale."""
     pos = o.get("pos", {})
     size = o.get("size", {})
-    scale = o.get("scale", 1) or 1
     return (pos.get("x", 0), pos.get("y", 0),
-            round(size.get("width", 0) / scale),
-            round(size.get("height", 0) / scale))
+            size.get("width", 0), size.get("height", 0))
 
 
 def place_connector(connector, side, scale):
@@ -146,7 +158,7 @@ def place_connector(connector, side, scale):
         changed = True
 
     if others:
-        anchor = next((o for o in others if o.get("primary")), None) or \
+        anchor = next((o for o in others if _is_primary(o)), None) or \
             min(others, key=lambda o: (o.get("pos", {}).get("x", 0),
                                        o.get("pos", {}).get("y", 0)))
         spot = gnome.place_beside(_logical_rect(anchor),
@@ -215,7 +227,8 @@ class KdeBackend:
         self.display = None           # pywayland Display
         self.manager = None           # zkde_screencast_unstable_v1 proxy
         self.stream = None            # zkde_screencast_stream_unstable_v1
-        self.node = None
+        self.node = None              # PipeWire node id (created event)
+        self.serial = None            # PipeWire object serial (v6+)
         self.proc = None
         self.connector = None
         self._place_lock = threading.Lock()
@@ -246,7 +259,16 @@ class KdeBackend:
         from protocols.zkde_screencast import ZkdeScreencastUnstableV1
 
         self.display = Display()
-        self.display.connect()
+        try:
+            self.display.connect()
+        except Exception as e:
+            raise RuntimeError(
+                f"could not connect to the Wayland display "
+                f"({os.environ.get('WAYLAND_DISPLAY', 'wayland-0')}): {e}. "
+                "Start the daemon inside your KDE Wayland session "
+                "(tandem -> Start Tandem), not over plain SSH") from e
+        log("[kde] connected to Wayland; asking KWin for the virtual "
+            "monitor")
         try:
             self._setup_stream()
         except Exception:
@@ -275,10 +297,17 @@ class KdeBackend:
         self.manager = registry.bind(
             gname, ZkdeScreencastUnstableV1, min(gver, 6))
 
+        log(f"[kde] zkde_screencast_unstable_v1 version {gver} "
+            f"(using {min(gver, 6)})")
         got = {}
 
         def on_created(stream, node):
             got["node"] = node
+
+        def on_serial(stream, object_serial_hi, object_serial_low):
+            # protocol version >= 6 sends the PipeWire object serial
+            # instead of (in addition to) the node id
+            got["serial"] = (object_serial_hi << 32) | object_serial_low
 
         def on_failed(stream, error):
             got["error"] = error
@@ -293,21 +322,28 @@ class KdeBackend:
             stream = self.manager.stream_virtual_output(
                 OUTPUT_NAME, a.width, a.height, scale, CURSOR_EMBEDDED)
         stream.dispatcher["created"] = on_created
+        stream.dispatcher["serial"] = on_serial
         stream.dispatcher["failed"] = on_failed
         self.stream = stream
 
+        # roundtrip() reads and dispatches Wayland events; a bare
+        # dispatch(block=False) only processes what is already queued, so
+        # KWin's reply would never be seen and setup would time out.
         deadline = time.monotonic() + SETUP_TIMEOUT
         while not got and time.monotonic() < deadline:
-            self.display.flush()
-            self.display.dispatch(block=False)
-            time.sleep(0.01)
+            self.display.roundtrip()
         if "error" in got:
             raise RuntimeError(f"KWin refused the virtual output: "
                                f"{got['error']}")
-        if "node" not in got:
-            raise RuntimeError("KWin never announced the PipeWire stream")
-        self.node = got["node"]
-        log(f"kwin virtual monitor stream on pipewire node {self.node}")
+        self.node = got.get("node")
+        self.serial = got.get("serial")
+        if self.node is None and self.serial is None:
+            raise RuntimeError(
+                "KWin never announced the PipeWire stream "
+                f"(no reply within {SETUP_TIMEOUT}s). A screen-recording "
+                "permission prompt may be waiting on the desktop")
+        log(f"[kde] KWin created the virtual monitor; PipeWire node "
+            f"{self.node} (object serial {self.serial})")
 
     def create_touch_surface(self):
         """A uinput touchscreen mapped onto the virtual monitor."""
@@ -347,7 +383,8 @@ class KdeBackend:
             raise RuntimeError("no usable GStreamer H.264 encoder found")
         self.stop_capture()                 # never two encoders on one node
         rfd, wfd = os.pipe()
-        cmd = self._build_pipeline(self.node, gnome.bitrate_kbps(a.bitrate),
+        cmd = self._build_pipeline(self.node, self.serial,
+                                   gnome.bitrate_kbps(a.bitrate),
                                    a.gop, enc, fd=wfd,
                                    fps=getattr(a, "fps", 60) or 60)
         log(f"encoder {enc}; capture cmd: " + " ".join(cmd))
@@ -370,14 +407,25 @@ class KdeBackend:
         return os.fdopen(rfd, "rb", buffering=0)
 
     @staticmethod
-    def _build_pipeline(node, kbps, gop, enc, fd=3, fps=60):
+    def _pipewiresrc(node, serial):
+        """pipewiresrc for our stream: by node id when KWin sent one
+        (protocol < 6), by the PipeWire object serial otherwise (v6+)."""
+        if node is not None:
+            return gnome.pipewiresrc(node)
+        src = f"pipewiresrc target-object={serial} do-timestamp=true"
+        if gnome.has_prop("pipewiresrc", "keepalive-time"):
+            src += " keepalive-time=1000"
+        return src
+
+    @classmethod
+    def _build_pipeline(cls, node, serial, kbps, gop, enc, fd=3, fps=60):
         """gst-launch argv: PipeWire node -> H.264 Annex-B access units.
 
         No width/height caps: KWin fixes the stream's pixel size when the
         virtual output is created (logical size x scale), so forcing caps
         would break scaled outputs. The format is negotiated with the node.
         """
-        desc = (f"{gnome.pipewiresrc(node)} ! video/x-raw "
+        desc = (f"{cls._pipewiresrc(node, serial)} ! video/x-raw "
                 f"! {gnome.LEAKY_QUEUE} "
                 f"! {gnome.encoder_chain(enc, kbps, gop, fps)} "
                 f"! h264parse config-interval=-1 "
