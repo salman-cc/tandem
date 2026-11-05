@@ -8,6 +8,7 @@ Supported desktops (see backends/):
     Arch      + Hyprland          -> hyprland backend
     Ubuntu    + GNOME (Wayland)   -> gnome backend
     Fedora    + GNOME (Wayland)   -> gnome backend
+    Fedora + KDE Plasma (Wayland) -> kde backend
 """
 
 import glob
@@ -29,6 +30,7 @@ import secure_link
 import uinput_touch
 from backends import gnome as gnome_backend
 from backends import hyprland as hypr_backend
+from backends import kde as kde_backend
 
 CONFIG_DIR = secure_link.CONFIG_DIR
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
@@ -55,7 +57,7 @@ RES_PRESETS = [
 
 @dataclass
 class Config:
-    backend: str = "auto"          # auto / hyprland / gnome
+    backend: str = "auto"          # auto / hyprland / gnome / kde
     output: str = "EXT-1"
     side: str = "right"            # right / left / up / down
     width: int = 1920
@@ -284,6 +286,37 @@ DEPS = {
           "fedora": "gstreamer1-plugin-openh264"}, True,
          "x264 / openh264 (VA-API used automatically if present)"),
     ],
+    "kde": [
+        ("gst-launch-1.0", _bin("gst-launch-1.0"),
+         {"arch": "gstreamer", "debian": "gstreamer1.0-tools",
+          "fedora": "gstreamer1"}, True, "runs the capture/encode pipeline"),
+        ("pywayland", lambda: importlib.util.find_spec("pywayland")
+         is not None,
+         {"arch": "python-pywayland", "debian": "python3-pywayland",
+          "fedora": "python3-pywayland"}, True,
+         "talks to KWin's screencast protocol"),
+        ("kscreen-doctor", _bin("kscreen-doctor"),
+         {"arch": "libkscreen", "debian": "libkscreen-bin",
+          "fedora": "kf6-kscreen"}, True,
+         "places and scales the virtual monitor"),
+        ("pipewiresrc", _gst("pipewiresrc"),
+         {"arch": "gst-plugin-pipewire", "debian": "gstreamer1.0-pipewire",
+          "fedora": "pipewire-gstreamer"}, True, "reads the virtual monitor"),
+        ("videoconvert", _gst("videoconvert"),
+         {"arch": "gst-plugins-base", "debian": "gstreamer1.0-plugins-base",
+          "fedora": "gstreamer1-plugins-base"}, True, "pixel format conversion"),
+        ("h264parse", _gst("h264parse"),
+         {"arch": "gst-plugins-bad", "debian": "gstreamer1.0-plugins-bad",
+          "fedora": "gstreamer1-plugins-bad-free"}, True,
+         "H.264 framing (+ VA-API encoders)"),
+        ("H.264 encoder", _any_h264_encoder,
+         {"arch": "gst-plugins-ugly", "debian": "gstreamer1.0-plugins-ugly",
+          "fedora": "gstreamer1-plugin-openh264"}, True,
+         "x264 / openh264 (VA-API used automatically if present)"),
+        ("busctl", _bin("busctl"),
+         {"arch": "systemd", "debian": "systemd", "fedora": "systemd"},
+         False, "maps the touchscreen onto the monitor (touch input)"),
+    ],
     "common": [
         ("openssl", _bin("openssl"),
          {"arch": "openssl", "debian": "openssl", "fedora": "openssl"}, True,
@@ -356,6 +389,8 @@ def primary_monitor_desc(backend) -> str:
                     return f"{specs[0][0]}  at {x},{y}  scale {sc:g}"
         except Exception:
             pass
+    elif backend == "kde":
+        return kde_backend.primary_monitor_desc()
     return "(none found)"
 
 
@@ -871,11 +906,11 @@ UINPUT_RULE = ('KERNEL=="uinput", SUBSYSTEM=="misc", TAG+="uaccess", '
 def touch_setup_check(cfg: Config):
     """What stops touch input from working on this computer, or None.
 
-    Returns {"problem": text, "fix": argv (run with sudo) or None}. Only the
-    Hyprland backend needs setup (a uinput device); GNOME injects touches
-    through Mutter's RemoteDesktop API without any permissions.
+    Returns {"problem": text, "fix": argv (run with sudo) or None}. The
+    Hyprland and KDE backends need setup (a uinput device); GNOME injects
+    touches through Mutter's RemoteDesktop API without any permissions.
     """
-    if not cfg.touch or cfg.resolved_backend() != "hyprland":
+    if not cfg.touch or cfg.resolved_backend() not in ("hyprland", "kde"):
         return None
     problem = uinput_touch.uinput_access_problem()
     if not problem:
