@@ -6,8 +6,9 @@ The daemon picks a **backend** based on the running session:
 | --- | --- | --- |
 | Hyprland | `$HYPRLAND_INSTANCE_SIGNATURE` | `hyprland` |
 | GNOME on Wayland (Ubuntu, Fedora Workstation and similar) | `$XDG_CURRENT_DESKTOP` contains `GNOME`, and `$WAYLAND_DISPLAY` is set | `gnome` |
-| GNOME on Xorg | None | Not supported, because virtual monitors need Wayland |
-| KDE, Sway and others | None | Not yet. See the roadmap |
+| KDE Plasma on Wayland | `$XDG_CURRENT_DESKTOP` contains `KDE`, and `$WAYLAND_DISPLAY` is set | `kde` |
+| GNOME or KDE on Xorg | None | Not supported, because virtual monitors need Wayland |
+| Sway and others | None | Not yet. See the roadmap |
 
 To override the detected backend, use *Configure → Desktop backend* in the TUI,
 or the `--backend` option on the daemon. The TUI's **Dependencies** screen shows
@@ -126,6 +127,37 @@ sudo dnf install android-tools             # optional
   Intel) or `gstreamer1-plugins-ugly` (x264). The backend picks the best encoder
   that is available.
 
+## KDE Plasma (Wayland, Plasma 5.24 and newer)
+
+```bash
+# Fedora KDE:
+sudo dnf install python3-pywayland gstreamer1 pipewire-gstreamer \
+    gstreamer1-plugins-base gstreamer1-plugins-bad-free gstreamer1-plugin-openh264
+sudo dnf install android-tools             # optional
+```
+
+- Log in to the **"Plasma (Wayland)"** session. X11 cannot create virtual
+  monitors. The TUI tells you when you are on X11.
+- The backend talks to KWin through its own Wayland protocol
+  (`zkde_screencast_unstable_v1`, the same one krfb-virtualmonitor uses) with
+  pywayland. It creates a virtual output called `Virtual-Tandem`, gets a
+  PipeWire node for it, and encodes with GStreamer, like the GNOME backend.
+  KWin removes the output by itself when the stream stops.
+- Placement and scale go through `kscreen-doctor` (part of Plasma). Only the
+  virtual output is moved; your monitors are left exactly as they are. The
+  virtual monitor also appears in *System Settings → Display and Monitor*,
+  and you can drag it there.
+- **Touch input** needs the same one-time udev setup as Hyprland (see *Arch
+  Linux with Hyprland*). The virtual touchscreen is then mapped onto the
+  virtual monitor through KWin's input-device settings, so touches land on
+  the phone's screen and the pointer stays put. If the mapping could not be
+  set automatically, pick the monitor under *System Settings → Touch Screen*.
+- Fedora's Mesa ships with H.264 *encoding* disabled, so VA-API is not
+  available out of the box; `openh264` from the fedora-cisco-openh264
+  repository is used instead. For hardware encoding or x264, enable
+  **RPM Fusion** and install `mesa-va-drivers-freeworld` (AMD or Intel) or
+  `gstreamer1-plugins-ugly` (x264).
+
 ---
 
 ## How the GNOME backend works
@@ -224,6 +256,10 @@ phone's vendor. The pairing QR code then includes that address.
 | TUI: *"python gi [missing]"* even after installing `python3-gobject` or `python-gobject` | Another `python3`, from conda, miniconda, pyenv, a venv or Homebrew, comes first on `PATH`. Distribution packages go only into `/usr/bin/python3`. The launchers `tandem`, `start-tandem.sh` and `install.sh` always use `/usr/bin/python3`. To override this, set `TANDEM_PYTHON=…`. The Dependencies screen shows which interpreter it is running under |
 | `tandem`: `_curses.error: setupterm: could not find terminfo database` | The same cause. Conda's Python bundles its own ncurses, which does not look in `/usr/share/terminfo`. The launchers use the system Python, which avoids this. When you start the TUI directly with `python3 tui.py`, it also retries with the system terminfo directories, and then with `TERM=xterm-256color` |
 | TUI: *"GNOME is running on X11"* | Log in to the Wayland session |
+| TUI: *"KDE Plasma is not running on Wayland here"* | Log in to the "Plasma (Wayland)" session |
+| KDE: `KWin does not offer zkde_screencast_unstable_v1` | Not a KDE Plasma Wayland session, or KWin is older than Plasma 5.24 |
+| KDE: the monitor appears on the wrong side | The log shows `could not place virtual monitor (…)`. Drag it in *System Settings → Display and Monitor*. The stream keeps working |
+| KDE: touches land on the laptop screen | The touch device is not mapped to the virtual monitor. Map it in *System Settings → Touch Screen*, or change side or scale so Tandem maps it again |
 | GNOME: `could not create the virtual monitor` | GNOME is older than 40, or Mutter's ScreenCast interface is unavailable. Check with `gdbus introspect --session -d org.gnome.Mutter.ScreenCast -o /org/gnome/Mutter/ScreenCast` |
 | GNOME: monitor appears on the wrong side | The log shows `could not place virtual monitor (…)`. Drag it in *Settings → Displays*. The stream keeps working |
 | Hyprland: resolution or scale ignored | Hyprland 0.55 and later need `hyprctl eval`. The daemon uses it automatically. Check that `hyprctl eval 'return 1'` prints `ok` |
