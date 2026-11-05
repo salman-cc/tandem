@@ -73,9 +73,9 @@ DIALOG_TIMEOUT_S = 240         # waiting for the user at the consent dialog
 STATE_DIR = os.path.expanduser("~/.config/tandem")
 RESTORE_FILE = os.path.join(STATE_DIR, "kde-portal-restore")
 
-# The output we ask the portal for is named "Tandem"; KWin prefixes the
-# connector name with "Virtual-". The reliable discovery is the
-# before/after diff in find_connector (portal-created names vary).
+# The portal names the virtual output itself (KWin prefixes connector
+# names with "Virtual-"), so the reliable discovery is the before/after
+# diff in find_connector; the name match is only a fast path.
 OUTPUT_NAME = "Tandem"
 CONNECTOR_PREFIX = "Virtual-"
 
