@@ -486,7 +486,8 @@ def configure_screen(win, cfg, live=False):
     cfg = copy.copy(cfg)            # edit a copy so cancel truly discards
     # each entry: (label, kind, key, choices)
     rows = [
-        ("Desktop backend", "choice", "backend", ["auto", "hyprland", "gnome"]),
+        ("Desktop backend", "choice", "backend",
+         ["auto", "hyprland", "gnome", "kde"]),
         ("Screen side", "choice", "side", ["right", "left", "up", "down"]),
         ("Resolution", "resolution", None, None),
         ("Refresh (FPS)", "choice", "fps", [30, 60, 120]),
@@ -605,6 +606,10 @@ def preflight(win, cfg):
         problem = ["GNOME is running on X11 — virtual monitors need Wayland.",
                    "Log out, click the gear on the login screen and pick "
                    "'Ubuntu' / 'GNOME' (not 'on Xorg')."]
+    elif backend == "kde" and not backends.kde.is_kde_wayland():
+        problem = ["KDE Plasma is not running on Wayland here; virtual "
+                   "monitors need Wayland.",
+                   "Log out and pick the 'Plasma (Wayland)' session."]
     elif core.missing_packages(backend, required_only=True):
         deps_screen(win, cfg)
         if core.missing_packages(backend, required_only=True):
