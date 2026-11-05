@@ -138,11 +138,13 @@ sudo dnf install android-tools             # optional
 
 - Log in to the **"Plasma (Wayland)"** session. X11 cannot create virtual
   monitors. The TUI tells you when you are on X11.
-- The backend talks to KWin through its own Wayland protocol
-  (`zkde_screencast_unstable_v1`, the same one krfb-virtualmonitor uses) with
-  pywayland. It creates a virtual output called `Virtual-Tandem`, gets a
+- The backend asks the XDG Desktop Portal for a virtual monitor (ScreenCast
+  portal, Virtual source type, implemented by xdg-desktop-portal-kde), gets a
   PipeWire node for it, and encodes with GStreamer, like the GNOME backend.
-  KWin removes the output by itself when the stream stops.
+  KWin's own screencast protocol is reserved for KDE's signed-in components,
+  so the portal is the supported path. Approve the screen-sharing dialog on
+  the first run; the choice is remembered afterwards. The virtual monitor
+  goes away when Tandem stops.
 - Placement and scale go through `kscreen-doctor` (part of Plasma). Only the
   virtual output is moved; your monitors are left exactly as they are. The
   virtual monitor also appears in *System Settings → Display and Monitor*,
@@ -257,7 +259,8 @@ phone's vendor. The pairing QR code then includes that address.
 | `tandem`: `_curses.error: setupterm: could not find terminfo database` | The same cause. Conda's Python bundles its own ncurses, which does not look in `/usr/share/terminfo`. The launchers use the system Python, which avoids this. When you start the TUI directly with `python3 tui.py`, it also retries with the system terminfo directories, and then with `TERM=xterm-256color` |
 | TUI: *"GNOME is running on X11"* | Log in to the Wayland session |
 | TUI: *"KDE Plasma is not running on Wayland here"* | Log in to the "Plasma (Wayland)" session |
-| KDE: `KWin does not offer zkde_screencast_unstable_v1` | Not a KDE Plasma Wayland session, or KWin is older than Plasma 5.24 |
+| KDE: `this xdg-desktop-portal cannot create virtual monitors` | The session is not KDE Plasma 6 on Wayland, or `xdg-desktop-portal-kde` is missing. Install it and restart the session |
+| KDE: `portal Start was refused or cancelled` | The screen-sharing dialog was declined. Run tandem again and approve it |
 | KDE: the monitor appears on the wrong side | The log shows `could not place virtual monitor (…)`. Drag it in *System Settings → Display and Monitor*. The stream keeps working |
 | KDE: touches land on the laptop screen | The touch device is not mapped to the virtual monitor. Map it in *System Settings → Touch Screen*, or change side or scale so Tandem maps it again |
 | GNOME: `could not create the virtual monitor` | GNOME is older than 40, or Mutter's ScreenCast interface is unavailable. Check with `gdbus introspect --session -d org.gnome.Mutter.ScreenCast -o /org/gnome/Mutter/ScreenCast` |
