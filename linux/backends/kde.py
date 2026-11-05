@@ -293,6 +293,7 @@ class PortalVirtualMonitor:
         self.session = None
         self.node = None
         self.serial = None
+        self.pw_fd = None
         self._open()
 
     def _request(self, method, extra_args, timeout_s=DIALOG_TIMEOUT_S):
@@ -393,6 +394,16 @@ class PortalVirtualMonitor:
         self.serial = _v(props.get("pipewire-serial")) if props else None
         if self.serial is not None and not isinstance(self.serial, int):
             self.serial = None
+        # Portal PipeWire nodes live on a private remote, not on the
+        # default PipeWire socket: open it and hand the fd to
+        # pipewiresrc, or the node "is not found".
+        result, fd_list = self.bus.call_with_unix_fd_list_sync(
+            PORTAL_BUS, PORTAL_PATH, SCREENCAST_IFACE,
+            "OpenPipeWireRemote",
+            GLib.Variant("(oa{sv})", (self.session, {})),
+            GLib.VariantType("(h)"), Gio.DBusCallFlags.NONE,
+            PORTAL_CALL_TIMEOUT_MS, None, None)
+        self.pw_fd = fd_list.get(result.unpack()[0])
         rd = results.get("restore_data")
         if rd is not None:
             _save_restore_data(rd)
@@ -415,6 +426,12 @@ class PortalVirtualMonitor:
             except Exception:
                 pass               # already gone
             self.session = None
+        if self.pw_fd is not None:
+            try:
+                os.close(self.pw_fd)
+            except OSError:
+                pass
+            self.pw_fd = None
 
 
 class KdeBackend:
@@ -425,6 +442,7 @@ class KdeBackend:
         self.portal = None            # PortalVirtualMonitor
         self.node = None              # PipeWire node id
         self.serial = None            # PipeWire object serial (portal v6+)
+        self.pw_fd = None             # portal PipeWire remote fd
         self.proc = None
         self.connector = None
         self._pre_outputs = None      # KScreen names before the output
@@ -461,6 +479,7 @@ class KdeBackend:
         self.portal = PortalVirtualMonitor()
         self.node = self.portal.node
         self.serial = self.portal.serial
+        self.pw_fd = self.portal.pw_fd
         log(f"[kde] the portal is sharing the virtual monitor; PipeWire "
             f"node {self.node} (object serial {self.serial})")
 
@@ -502,18 +521,22 @@ class KdeBackend:
             raise RuntimeError("no usable GStreamer H.264 encoder found")
         self.stop_capture()                 # never two encoders on one node
         rfd, wfd = os.pipe()
-        cmd = self._build_pipeline(self.node, self.serial,
+        cmd = self._build_pipeline(self.node, self.serial, self.pw_fd,
                                    gnome.bitrate_kbps(a.bitrate),
                                    a.gop, enc, fd=wfd,
                                    fps=getattr(a, "fps", 60) or 60)
         log(f"encoder {enc}; capture cmd: " + " ".join(cmd))
         try:
             # Own session: a Ctrl-C or hangup on the launching terminal
-            # must not kill the encoder behind the daemon's back.
-            self.proc = subprocess.Popen(cmd, stdout=wfd,
+            # must not kill the encoder behind the daemon's back. It still
+            # dies with the daemon: its next write to the pipe gets EPIPE,
+            # and the PipeWire remote fd is closed on teardown.
+            self.proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
+                                         stdout=subprocess.DEVNULL,
                                          stderr=subprocess.PIPE,
+                                         pass_fds=(wfd, self.pw_fd),
                                          start_new_session=True)
-        except Exception:
+        except BaseException:
             os.close(rfd)
             raise
         finally:
@@ -526,27 +549,29 @@ class KdeBackend:
         return os.fdopen(rfd, "rb", buffering=0)
 
     @staticmethod
-    def _pipewiresrc(node, serial):
-        """pipewiresrc for our stream: by the PipeWire object serial when
-        the portal reported one (portal v6+; node ids can be reused),
-        else by node id."""
+    def _pipewiresrc(node, serial, pw_fd):
+        """pipewiresrc for our stream: on the portal's private PipeWire
+        remote (fd= from OpenPipeWireRemote), targeting the object serial
+        when the portal reported one (portal v6+; node ids can be reused),
+        else the node id."""
         if serial is not None:
-            src = f"pipewiresrc target-object={serial} do-timestamp=true"
+            src = f"pipewiresrc fd={pw_fd} target-object={serial} do-timestamp=true"
         else:
-            src = f"pipewiresrc path={node} do-timestamp=true"
+            src = f"pipewiresrc fd={pw_fd} path={node} do-timestamp=true"
         if gnome.has_prop("pipewiresrc", "keepalive-time"):
             src += " keepalive-time=1000"
         return src
 
     @classmethod
-    def _build_pipeline(cls, node, serial, kbps, gop, enc, fd=3, fps=60):
+    def _build_pipeline(cls, node, serial, pw_fd, kbps, gop, enc, fd=3,
+                        fps=60):
         """gst-launch argv: PipeWire stream -> H.264 Annex-B access units.
 
         No width/height caps: the portal fixes the stream's pixel size
         when the virtual output is created, so forcing caps would break
         scaled outputs. The format is negotiated with the node.
         """
-        desc = (f"{cls._pipewiresrc(node, serial)} ! video/x-raw "
+        desc = (f"{cls._pipewiresrc(node, serial, pw_fd)} ! video/x-raw "
                 f"! {gnome.LEAKY_QUEUE} "
                 f"! {gnome.encoder_chain(enc, kbps, gop, fps)} "
                 f"! h264parse config-interval=-1 "
