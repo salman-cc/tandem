@@ -256,7 +256,6 @@ class KdeBackend:
     def setup(self):
         """Create the virtual output and get its PipeWire node id."""
         from pywayland.client import Display
-        from protocols.zkde_screencast import ZkdeScreencastUnstableV1
 
         self.display = Display()
         try:
@@ -276,15 +275,23 @@ class KdeBackend:
             raise
 
     def _setup_stream(self):
+        from protocols.zkde_screencast import ZkdeScreencastUnstableV1
+
         registry = self.display.get_registry()
         found = {}
 
         def on_global(reg, name, interface, version):
-            if interface == ZkdeScreencastUnstableV1.name:
-                found["global"] = (name, version)
+            try:
+                if interface == ZkdeScreencastUnstableV1.name:
+                    found["global"] = (name, version)
+            except Exception as e:     # surfaced below, not lost in pywayland
+                found["callback_error"] = e
 
         registry.dispatcher["global"] = on_global
         self.display.roundtrip()
+        if "callback_error" in found:
+            raise RuntimeError(f"could not read the Wayland registry: "
+                               f"{found['callback_error']}")
         if "global" not in found:
             raise RuntimeError(
                 "KWin does not offer zkde_screencast_unstable_v1; "
@@ -312,6 +319,17 @@ class KdeBackend:
         def on_failed(stream, error):
             got["error"] = error
 
+        def wrap(handler):
+            def call(*args):
+                try:
+                    handler(*args)
+                except Exception as e:   # surfaced below, not lost in pywayland
+                    got["callback_error"] = e
+            return call
+        on_created = wrap(on_created)
+        on_serial = wrap(on_serial)
+        on_failed = wrap(on_failed)
+
         a = self.a
         scale = a.scale or 1.0
         if gver >= 4:
@@ -335,6 +353,9 @@ class KdeBackend:
         if "error" in got:
             raise RuntimeError(f"KWin refused the virtual output: "
                                f"{got['error']}")
+        if "callback_error" in got:
+            raise RuntimeError(f"could not read KWin's stream reply: "
+                               f"{got['callback_error']}")
         self.node = got.get("node")
         self.serial = got.get("serial")
         if self.node is None and self.serial is None:
